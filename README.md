@@ -71,6 +71,8 @@ python log_monitor_app_atualizado.py
 - `zip_and_clear_log`: Compacta o arquivo de log e limpa o conteúdo original.
 - `manage_backup_dir_size`: Gerencia o tamanho da pasta de backup, excluindo arquivos antigos conforme necessário.
 
+![Demonstração do Log Monitor App](assets/20240621134815.gif)
+
 ## Contribuição
 
 Contribuições são bem-vindas! Sinta-se à vontade para abrir um issue ou enviar um pull request.
