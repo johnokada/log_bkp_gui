@@ -1,12 +1,18 @@
-
-import os
-import shutil
-import zipfile
-from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from threading import Thread
+import threading
 import time
+import zipfile
+import os
+from PIL import Image
+
+try:
+    import pystray
+    from pystray import MenuItem as PyMenuItem
+    from pystray import Icon as PystrayIcon
+except ImportError:
+    messagebox.showerror("Erro", "A biblioteca pystray não está instalada. Instale usando 'pip install pystray'.")
+    raise
 
 class LogMonitorApp:
     def __init__(self, root):
@@ -20,6 +26,9 @@ class LogMonitorApp:
         self.unit = tk.StringVar(value="Bytes")
         self.background_mode = tk.BooleanVar()
         self.monitoring = False
+        
+        current_dir = os.path.dirname(__file__)
+        self.icon_path = os.path.join(current_dir, "icon.png")
 
         tk.Label(root, text="Arquivo de Log:").grid(row=0, column=0, padx=10, pady=10)
         self.log_file_entry = tk.Entry(root, width=50)
@@ -40,29 +49,38 @@ class LogMonitorApp:
         tk.OptionMenu(root, self.unit, "Bytes", "Megabytes", "Gigabytes").grid(row=3, column=2, padx=10, pady=10)
 
         self.start_button = tk.Button(root, text="Iniciar", command=self.start_monitoring)
-        self.start_button.grid(row=4, column=0, padx=10, pady=10)
+        self.start_button.grid(row=4, column=0, columnspan=3, padx=10, pady=10)
 
         self.stop_button = tk.Button(root, text="Parar", command=self.stop_monitoring, state=tk.DISABLED)
-        self.stop_button.grid(row=4, column=1, padx=10, pady=10)
+        self.stop_button.grid(row=5, column=0, columnspan=3, padx=10, pady=10)
 
         self.background_check = tk.Checkbutton(root, text="Executar em segundo plano", variable=self.background_mode)
-        self.background_check.grid(row=4, column=2, padx=10, pady=10)
+        self.background_check.grid(row=6, column=0, columnspan=3, padx=10, pady=10)
+
+        # Variáveis para controlar a execução do thread de monitoramento
+        self.monitor_thread = None
+        self.monitor_thread_stop_event = threading.Event()
+
+        # Variável para armazenar o estado da janela principal
+        self.main_window_visible = True
+
+        # Configuração para controlar o estado de minimização
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close_window)
+        self.root.protocol("WM_ICONIFY", self.on_minimize_window)
+        self.root.protocol("WM_DEICONIFY", self.on_restore_window)
+
+        # Inicializa a bandeja do sistema
+        self.tray_icon = None
 
     def select_log_file(self):
-        self.log_file = filedialog.askopenfilename()
+        self.log_file = filedialog.askopenfilename(initialdir=os.getcwd(), title="Selecionar Arquivo de Log")
+        self.log_file_entry.delete(0, tk.END)
         self.log_file_entry.insert(0, self.log_file)
 
     def select_backup_dir(self):
-        self.backup_dir = filedialog.askdirectory()
+        self.backup_dir = filedialog.askdirectory(initialdir=os.getcwd(), title="Selecionar Pasta de Backup")
+        self.backup_dir_entry.delete(0, tk.END)
         self.backup_dir_entry.insert(0, self.backup_dir)
-
-    def convert_size_to_bytes(self, size, unit):
-        if unit == "Megabytes":
-            return size * 1024 * 1024
-        elif unit == "Gigabytes":
-            return size * 1024 * 1024 * 1024
-        else:
-            return size
 
     def start_monitoring(self):
         if not self.log_file or not self.backup_dir:
@@ -73,29 +91,36 @@ class LogMonitorApp:
             messagebox.showerror("Erro", "Informe os tamanhos máximos para o log e a pasta de backup.")
             return
 
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            messagebox.showinfo("Info", "Monitoramento já está em andamento.")
+            return
+
         self.monitoring = True
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
 
         if self.background_mode.get():
-            self.root.iconify()  # Minimizar para a bandeja do sistema
+            self.hide_to_tray()  # Oculta a janela principal ao iniciar em segundo plano
 
-        self.monitor_thread = Thread(target=self.monitor_log_file)
+        # Inicia o thread de monitoramento
+        self.monitor_thread_stop_event.clear()
+        self.monitor_thread = threading.Thread(target=self.monitor_log_file)
         self.monitor_thread.start()
 
     def stop_monitoring(self):
         self.monitoring = False
+        self.monitor_thread_stop_event.set()
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         if self.background_mode.get():
-            self.root.deiconify()  # Restaurar a janela do sistema
+            self.show_from_tray()
 
     def monitor_log_file(self):
         max_log_size_bytes = self.convert_size_to_bytes(self.max_log_size.get(), self.unit.get())
         max_backup_size_bytes = self.convert_size_to_bytes(self.max_backup_size.get(), self.unit.get())
 
-        while self.monitoring:
-            if os.path.getsize(self.log_file) > max_log_size_bytes:
+        while self.monitoring and not self.monitor_thread_stop_event.is_set():
+            if os.path.exists(self.log_file) and os.path.getsize(self.log_file) > max_log_size_bytes:
                 self.zip_and_clear_log()
 
             self.manage_backup_dir_size(max_backup_size_bytes)
@@ -103,7 +128,7 @@ class LogMonitorApp:
             time.sleep(10)  # Verificar a cada 10 segundos
 
     def zip_and_clear_log(self):
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        timestamp = time.strftime("%Y%m%d%H%M%S")
         zip_filename = f"log_backup_{timestamp}.zip"
         zip_filepath = os.path.join(self.backup_dir, zip_filename)
 
@@ -116,7 +141,7 @@ class LogMonitorApp:
     def manage_backup_dir_size(self, max_backup_size_bytes):
         total_size = 0
         files = []
-        
+
         for filename in os.listdir(self.backup_dir):
             filepath = os.path.join(self.backup_dir, filename)
             if os.path.isfile(filepath):
@@ -130,7 +155,70 @@ class LogMonitorApp:
             total_size -= os.path.getsize(oldest_file[0])
             os.remove(oldest_file[0])
 
-if __name__ == "__main__":
+    def hide_to_tray(self):
+        self.root.withdraw()  # Oculta a janela principal do Tkinter
+
+        icon = self.create_icon()
+        menu = self.create_menu()
+
+        self.tray_icon = PystrayIcon("Log Monitor", icon, menu=menu)
+        self.tray_icon.run()
+
+    def show_from_tray(self):
+        if self.tray_icon:
+            self.tray_icon.stop()
+            if not self.main_window_visible:
+                self.root.withdraw()  # Garante que a janela esteja oculta ao restaurar
+            self.root.deiconify()  # Exibe novamente a janela principal do Tkinter
+
+    def create_icon(self):
+        try:
+            icon = Image.open(self.icon_path)
+            icon = icon.resize((16, 16))
+            return icon
+        except Exception as e:
+            print(f"Erro ao carregar o ícone: {e}")
+            return None
+
+    def create_menu(self):
+        menu = (PyMenuItem('Abrir', lambda: self.on_tray_icon_click()),
+                PyMenuItem('Sair', lambda: self.on_tray_icon_close()))
+        return menu
+
+    def on_tray_icon_click(self):
+        self.show_from_tray()
+
+    def on_tray_icon_close(self):
+        self.root.quit()
+
+    def on_minimize_window(self):
+        if self.background_mode.get():
+            self.root.withdraw()
+            self.main_window_visible = False
+
+    def on_restore_window(self):
+        if self.background_mode.get() and not self.main_window_visible:
+            self.root.deiconify()
+            self.main_window_visible = True
+
+    def on_close_window(self):
+        self.stop_monitoring()
+        self.root.destroy()
+
+    def convert_size_to_bytes(self, size, unit):
+        multiplier = 1
+        if unit == "Bytes":
+            multiplier = 1
+        elif unit == "Megabytes":
+            multiplier = 1024 ** 2
+        elif unit == "Gigabytes":
+            multiplier = 1024 ** 3
+        return size * multiplier
+
+def main():
     root = tk.Tk()
     app = LogMonitorApp(root)
     root.mainloop()
+
+if __name__ == "__main__":
+    main()
