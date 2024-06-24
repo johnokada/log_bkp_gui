@@ -4,6 +4,7 @@ import os
 import zipfile
 import time
 from PIL import Image
+import logging
 import threading
 
 try:
@@ -14,8 +15,12 @@ except ImportError:
     messagebox.showerror("Erro", "A biblioteca pystray não está instalada. Instale usando 'pip install pystray'.")
     raise
 
+# Configuração do logger
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 class LogMonitorApp:
     def __init__(self, root):
+        logging.debug("Inicializando a aplicação LogMonitorApp.")
         self.root = root
         self.root.title("Log Monitor")
 
@@ -71,16 +76,21 @@ class LogMonitorApp:
         self.stop_tray_event = threading.Event()
 
     def select_log_file(self):
+        logging.debug("Selecionando arquivo de log.")
         self.log_file = filedialog.askopenfilename(initialdir=os.getcwd(), title="Selecionar Arquivo de Log")
         self.log_file_entry.delete(0, tk.END)
         self.log_file_entry.insert(0, self.log_file)
+        logging.info(f"Arquivo de log selecionado: {self.log_file}")
 
     def select_backup_dir(self):
+        logging.debug("Selecionando pasta de backup.")
         self.backup_dir = filedialog.askdirectory(initialdir=os.getcwd(), title="Selecionar Pasta de Backup")
         self.backup_dir_entry.delete(0, tk.END)
         self.backup_dir_entry.insert(0, self.backup_dir)
+        logging.info(f"Pasta de backup selecionada: {self.backup_dir}")
 
     def start_monitoring(self):
+        logging.debug("Iniciando monitoramento.")
         if not self.log_file or not self.backup_dir:
             messagebox.showerror("Erro", "Selecione o arquivo de log e a pasta de backup.")
             return
@@ -98,12 +108,14 @@ class LogMonitorApp:
         self.stop_button.config(state=tk.NORMAL)
 
         if self.background_mode.get():
+            logging.info("Iniciando em segundo plano.")
             self.hide_to_tray()  # Oculta a janela principal ao iniciar em segundo plano
 
         # Inicia o temporizador de monitoramento
         self.monitor_log_periodically()
 
     def stop_monitoring(self):
+        logging.debug("Parando monitoramento.")
         self.monitoring = False
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
@@ -124,10 +136,13 @@ class LogMonitorApp:
         max_log_size_bytes = self.convert_size_to_bytes(self.max_log_size.get(), self.unit.get())
         max_backup_size_bytes = self.convert_size_to_bytes(self.max_backup_size.get(), self.unit.get())
 
+        logging.debug(f"Monitorando arquivo de log. Tamanho máximo permitido: {max_log_size_bytes} bytes.")
         if os.path.exists(self.log_file) and os.path.getsize(self.log_file) > max_log_size_bytes:
+            logging.info("Tamanho máximo do arquivo de log excedido, realizando backup.")
             self.zip_and_clear_log()
             print("Backup do log realizado.")
 
+        logging.debug("Gerenciando tamanho da pasta de backup.")
         self.manage_backup_dir_size(max_backup_size_bytes)
         print("Verificação de tamanho da pasta de backup realizada.")
 
@@ -136,11 +151,14 @@ class LogMonitorApp:
         zip_filename = f"log_backup_{timestamp}.zip"
         zip_filepath = os.path.join(self.backup_dir, zip_filename)
 
+        logging.debug(f"Criando backup do log em {zip_filepath}.")
         with zipfile.ZipFile(zip_filepath, 'w') as zipf:
             zipf.write(self.log_file, os.path.basename(self.log_file))
 
         with open(self.log_file, 'w'):
             pass  # Limpa o conteúdo do arquivo de log
+
+        logging.info("Arquivo de log limpo após backup.")
 
     def manage_backup_dir_size(self, max_backup_size_bytes):
         total_size = 0
@@ -157,75 +175,87 @@ class LogMonitorApp:
         while total_size > max_backup_size_bytes and files:
             oldest_file = files.pop(0)
             total_size -= os.path.getsize(oldest_file[0])
+            logging.info(f"Removendo arquivo de backup mais antigo: {oldest_file[0]}")
             os.remove(oldest_file[0])
 
     def hide_to_tray(self):
+        logging.debug("Ocultando aplicação na bandeja do sistema.")
         self.root.withdraw()  # Oculta a janela principal do Tkinter
+        self.create_tray_icon()
 
-        icon = self.create_icon()
-        menu = self.create_menu()
-
-        self.tray_icon = PystrayIcon("Log Monitor", icon, menu=menu)
+    def create_tray_icon(self):
+        logging.debug("Criando ícone na bandeja do sistema.")
+        if not self.tray_icon:
+            image = self.create_icon()
+            self.tray_icon = PystrayIcon("Log Monitor", image, "Log Monitor", self.create_menu())
         self.stop_tray_event.clear()
         self.tray_thread = threading.Thread(target=self.run_tray_icon)
         self.tray_thread.start()
-
-    def run_tray_icon(self):
-        self.tray_icon.run()
-        self.stop_tray_event.set()
+        logging.debug("Executando ícone na bandeja do sistema.")
 
     def show_from_tray(self):
-        if self.tray_icon:
-            self.tray_icon.stop()
-            self.stop_tray_event.wait()  # Aguarda até que a thread do tray seja finalizada
-            self.root.after(0, self.root.deiconify)  # Exibe novamente a janela principal do Tkinter
+        logging.debug("Restaurando aplicação da bandeja do sistema.")
+        self.stop_tray_event.set()
+        self.root.deiconify()  # Restaura a janela principal do Tkinter
 
     def create_icon(self):
+        logging.debug("Criando ícone da bandeja do sistema.")
         try:
-            icon = Image.open(self.icon_path)
-            icon = icon.resize((16, 16))
-            return icon
+            image = Image.open(self.icon_path)
+            return image
         except Exception as e:
-            print(f"Erro ao carregar o ícone: {e}")
+            logging.error(f"Erro ao carregar o ícone: {e}")
             return None
 
     def create_menu(self):
-        menu = (PyMenuItem('Abrir', lambda: self.on_tray_icon_click()),
-                PyMenuItem('Sair', lambda: self.on_tray_icon_close()))
-        return menu
+        logging.debug("Criando menu da bandeja do sistema.")
+        return (
+            PyMenuItem("Restaurar", self.on_tray_icon_click),
+            PyMenuItem("Sair", self.on_exit)
+        )
 
-    def on_tray_icon_click(self):
+    def on_tray_icon_click(self, icon, item):
+        logging.debug("Ícone da bandeja clicado.")
         self.show_from_tray()
 
-    def on_tray_icon_close(self):
+    def on_exit(self, icon, item):
+        logging.debug("Saindo da aplicação a partir da bandeja do sistema.")
+        self.stop_monitoring()
         self.root.quit()
 
-    def on_minimize_window(self):
+    def run_tray_icon(self):
+        logging.debug("Executando thread da bandeja do sistema.")
+        self.tray_icon.run()
+
+    def on_close_window(self):
+        logging.debug("Fechando janela principal.")
+        if self.background_mode.get():
+            self.hide_to_tray()
+        else:
+            self.stop_monitoring()
+            self.root.quit()
+
+    def on_minimize_window(self, event):
+        logging.debug("Minimizando janela principal.")
         if self.background_mode.get():
             self.hide_to_tray()
 
-    def on_restore_window(self):
-        if self.background_mode.get():
-            self.show_from_tray()
-
-    def on_close_window(self):
-        self.stop_monitoring()
-        self.root.destroy()
+    def on_restore_window(self, event):
+        logging.debug("Restaurando janela principal.")
+        self.show_from_tray()
 
     def convert_size_to_bytes(self, size, unit):
-        multiplier = 1
-        if unit == "Bytes":
-            multiplier = 1
-        elif unit == "Megabytes":
-            multiplier = 1024 ** 2
-        elif unit == "Gigabytes":
-            multiplier = 1024 ** 3
-        return size * multiplier
+        logging.debug(f"Convertendo tamanho: {size} {unit} para bytes.")
+        units = {
+            "Bytes": 1,
+            "Kilobytes": 1024,
+            "Megabytes": 1024 ** 2,
+            "Gigabytes": 1024 ** 3
+        }
+        return size * units[unit]
 
-def main():
+if __name__ == "__main__":
+    logging.debug("Inicializando o Tkinter.")
     root = tk.Tk()
     app = LogMonitorApp(root)
     root.mainloop()
-
-if __name__ == "__main__":
-    main()
