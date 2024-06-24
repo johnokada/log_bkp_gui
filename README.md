@@ -20,13 +20,13 @@ O **Log Monitor App** é uma aplicação GUI para monitorar arquivos de log. Ele
 ## Instalação
 
 1. Certifique-se de ter o Python 3.x instalado em seu sistema.
-2. Clone este repositório ou baixe o arquivo `log_monitor_app_atualizado.py`.
+2. Clone este repositório ou baixe o arquivo `log_monitor_app.py`.
 
 ```sh
 git clone https://github.com/seu_usuario/seu_repositorio.git
 ```
 
-3. Navegue até o diretório onde o arquivo `log_monitor_app_atualizado.py` está localizado.
+3. Navegue até o diretório onde o arquivo `log_monitor_app.py` está localizado.
 
 ```sh
 cd caminho/para/seu_repositorio
@@ -35,7 +35,7 @@ cd caminho/para/seu_repositorio
 4. Execute o script.
 
 ```sh
-python log_monitor_app_atualizado.py
+python log_monitor_app.py
 ```
 
 ## Uso
