@@ -1,10 +1,10 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
-import threading
-import time
-import zipfile
 import os
+import zipfile
+import time
 from PIL import Image
+import threading
 
 try:
     import pystray
@@ -57,20 +57,18 @@ class LogMonitorApp:
         self.background_check = tk.Checkbutton(root, text="Executar em segundo plano", variable=self.background_mode)
         self.background_check.grid(row=6, column=0, columnspan=3, padx=10, pady=10)
 
-        # Variáveis para controlar a execução do thread de monitoramento
-        self.monitor_thread = None
-        self.monitor_thread_stop_event = threading.Event()
+        # Variáveis para controlar o temporizador de monitoramento
+        self.monitor_timer = None
 
-        # Variável para armazenar o estado da janela principal
-        self.main_window_visible = True
-
-        # Configuração para controlar o estado de minimização
+        # Configuração para controlar a estado de minimização
         self.root.protocol("WM_DELETE_WINDOW", self.on_close_window)
         self.root.protocol("WM_ICONIFY", self.on_minimize_window)
         self.root.protocol("WM_DEICONIFY", self.on_restore_window)
 
         # Inicializa a bandeja do sistema
         self.tray_icon = None
+        self.tray_thread = None
+        self.stop_tray_event = threading.Event()
 
     def select_log_file(self):
         self.log_file = filedialog.askopenfilename(initialdir=os.getcwd(), title="Selecionar Arquivo de Log")
@@ -91,7 +89,7 @@ class LogMonitorApp:
             messagebox.showerror("Erro", "Informe os tamanhos máximos para o log e a pasta de backup.")
             return
 
-        if self.monitor_thread and self.monitor_thread.is_alive():
+        if self.monitoring:
             messagebox.showinfo("Info", "Monitoramento já está em andamento.")
             return
 
@@ -102,30 +100,36 @@ class LogMonitorApp:
         if self.background_mode.get():
             self.hide_to_tray()  # Oculta a janela principal ao iniciar em segundo plano
 
-        # Inicia o thread de monitoramento
-        self.monitor_thread_stop_event.clear()
-        self.monitor_thread = threading.Thread(target=self.monitor_log_file)
-        self.monitor_thread.start()
+        # Inicia o temporizador de monitoramento
+        self.monitor_log_periodically()
 
     def stop_monitoring(self):
         self.monitoring = False
-        self.monitor_thread_stop_event.set()
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         if self.background_mode.get():
             self.show_from_tray()
 
+        # Cancela o temporizador, se estiver ativo
+        if self.monitor_timer:
+            self.root.after_cancel(self.monitor_timer)
+            self.monitor_timer = None
+
+    def monitor_log_periodically(self):
+        if self.monitoring:
+            self.monitor_log_file()
+            self.monitor_timer = self.root.after(10000, self.monitor_log_periodically)  # Verificar a cada 10 segundos
+
     def monitor_log_file(self):
         max_log_size_bytes = self.convert_size_to_bytes(self.max_log_size.get(), self.unit.get())
         max_backup_size_bytes = self.convert_size_to_bytes(self.max_backup_size.get(), self.unit.get())
 
-        while self.monitoring and not self.monitor_thread_stop_event.is_set():
-            if os.path.exists(self.log_file) and os.path.getsize(self.log_file) > max_log_size_bytes:
-                self.zip_and_clear_log()
+        if os.path.exists(self.log_file) and os.path.getsize(self.log_file) > max_log_size_bytes:
+            self.zip_and_clear_log()
+            print("Backup do log realizado.")
 
-            self.manage_backup_dir_size(max_backup_size_bytes)
-
-            time.sleep(10)  # Verificar a cada 10 segundos
+        self.manage_backup_dir_size(max_backup_size_bytes)
+        print("Verificação de tamanho da pasta de backup realizada.")
 
     def zip_and_clear_log(self):
         timestamp = time.strftime("%Y%m%d%H%M%S")
@@ -162,14 +166,19 @@ class LogMonitorApp:
         menu = self.create_menu()
 
         self.tray_icon = PystrayIcon("Log Monitor", icon, menu=menu)
+        self.stop_tray_event.clear()
+        self.tray_thread = threading.Thread(target=self.run_tray_icon)
+        self.tray_thread.start()
+
+    def run_tray_icon(self):
         self.tray_icon.run()
+        self.stop_tray_event.set()
 
     def show_from_tray(self):
         if self.tray_icon:
             self.tray_icon.stop()
-            if not self.main_window_visible:
-                self.root.withdraw()  # Garante que a janela esteja oculta ao restaurar
-            self.root.deiconify()  # Exibe novamente a janela principal do Tkinter
+            self.stop_tray_event.wait()  # Aguarda até que a thread do tray seja finalizada
+            self.root.after(0, self.root.deiconify)  # Exibe novamente a janela principal do Tkinter
 
     def create_icon(self):
         try:
@@ -193,13 +202,11 @@ class LogMonitorApp:
 
     def on_minimize_window(self):
         if self.background_mode.get():
-            self.root.withdraw()
-            self.main_window_visible = False
+            self.hide_to_tray()
 
     def on_restore_window(self):
-        if self.background_mode.get() and not self.main_window_visible:
-            self.root.deiconify()
-            self.main_window_visible = True
+        if self.background_mode.get():
+            self.show_from_tray()
 
     def on_close_window(self):
         self.stop_monitoring()
